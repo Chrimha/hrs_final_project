@@ -1,21 +1,28 @@
 #!/usr/bin/env python
 from __future__ import print_function
 import rospy
-import cv2
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import Range
 from cv_bridge import CvBridge, CvBridgeError
 import numpy as np
+
+# Disable at home
+import cv2
 import naoqi_bridge_msgs.msg
 from naoqi import ALProxy
+
 import std_msgs.msg
 import std_srvs.srv
 import os
 import random
 import time
+from visualization_msgs.msg import MarkerArray
+from visualization_msgs.msg import Marker
 
 
 robot = False
+ros = True
+
 if robot:
     motion = ALProxy("ALMotion", "nao.local", 9559)
     speech = ALProxy("ALTextToSpeech", "nao.local", 9559)
@@ -26,33 +33,39 @@ traffic_light = False
 contact = False
 pose = False
 end = False
+visual_pub = None
+marker_array = MarkerArray()
 
 
 def initialize_ros():
+    global visual_pub
     rospy.init_node('guidenao', anonymous=True)
 
-    # Subscibers
-    image_sub = rospy.Subscriber('/nao_robot/camera/top/camera/image_raw', Image, callback_image, queue_size=3)
-    # angles = rospy.Subscriber('joint_states', JointState, callback_angles, queue_size=3)
-    tactile_sub = rospy.Subscriber('/tactile_touch', naoqi_bridge_msgs.msg.HeadTouch, callback_tactile, queue_size=3)
-    recog_sub = rospy.Subscriber('/word_recognized', naoqi_bridge_msgs.msg.WordRecognized, callback_recog, queue_size=3)
-    footContact_sub = rospy.Subscriber("/foot_contact", std_msgs.msg.Bool, callback_footcontact, queue_size=3)
+    if robot:
+        # Subscibers
+        image_sub = rospy.Subscriber('/nao_robot/camera/top/camera/image_raw', Image, callback_image, queue_size=3)
+        # angles = rospy.Subscriber('joint_states', JointState, callback_angles, queue_size=3)
+        tactile_sub = rospy.Subscriber('/tactile_touch', naoqi_bridge_msgs.msg.HeadTouch, callback_tactile, queue_size=3)
+        recog_sub = rospy.Subscriber('/word_recognized', naoqi_bridge_msgs.msg.WordRecognized, callback_recog, queue_size=3)
+        footContact_sub = rospy.Subscriber("/foot_contact", std_msgs.msg.Bool, callback_footcontact, queue_size=3)
 
-    # Publisher
-    speech_pub = rospy.Publisher('/speech_action/goal', naoqi_bridge_msgs.msg.SpeechWithFeedbackActionGoal, queue_size=3)
-    # voc_params_pub = rospy.Publisher('/speech_vocabulary_action/goal',
-    # naoqi_bridge_msgs.SetSpeechVocabularyActionGoal, queue_size=3)
-    # walk_pub = rospy.Publisher('/cmd_pose', geometry_msgs.Pose2D, queue_size=3)
+        # Publisher
+        speech_pub = rospy.Publisher('/speech_action/goal', naoqi_bridge_msgs.msg.SpeechWithFeedbackActionGoal, queue_size=3)
+        # voc_params_pub = rospy.Publisher('/speech_vocabulary_action/goal',
+        # naoqi_bridge_msgs.SetSpeechVocabularyActionGoal, queue_size=3)
+        # walk_pub = rospy.Publisher('/cmd_pose', geometry_msgs.Pose2D, queue_size=3)
 
-    # Services
-    rospy.wait_for_service('/start_recognition')
-    recognition_start_srv = rospy.ServiceProxy('/start_recognition', std_srvs.srv.Empty())
-    rospy.wait_for_service('/stop_recognition')
-    recognition_stop_srv = rospy.ServiceProxy('/stop_recognition', std_srvs.srv.Empty())
-    rospy.wait_for_service('/stop_walk_srv')
-    stop_walk_srv = rospy.ServiceProxy('/stop_walk_srv', std_srvs.srv.Empty())
+        # Services
+        rospy.wait_for_service('/start_recognition')
+        recognition_start_srv = rospy.ServiceProxy('/start_recognition', std_srvs.srv.Empty())
+        rospy.wait_for_service('/stop_recognition')
+        recognition_stop_srv = rospy.ServiceProxy('/stop_recognition', std_srvs.srv.Empty())
+        rospy.wait_for_service('/stop_walk_srv')
+        stop_walk_srv = rospy.ServiceProxy('/stop_walk_srv', std_srvs.srv.Empty())
 
-    speech.say("Hello, how are you?")
+        speech.say("Hello, how are you?")
+
+    visual_pub = rospy.Publisher('visualization_marker_array', MarkerArray, queue_size=3)
 
 
 def initialize_motion():
@@ -225,6 +238,9 @@ def detect_aruco(cv_image_color2):
                                0.01)  # Draw Axis
             tvecs.append(tvec)
 
+            # ToDo
+            # create_marker(i, 1.0, 1.0, tvec[0], tvec[1])
+
     return cv_image_color2, tvecs
 
 
@@ -335,20 +351,53 @@ def recover():
 
 
 def main_loop():
+    global marker_array
     while not end:
-        recover()
+        if robot:
+            recover()
 
-    motion.rest()
+        if marker_array:
+            visual_pub.publish(marker_array)
+
+    if robot:
+        motion.rest()
+
+
+def create_marker(id, size_x, size_y, x, y):
+    marker = Marker()
+    marker.header.frame_id = "/map"
+    marker.header.stamp = rospy.Time.now()
+    marker.type = 1
+    marker.id = id
+    marker.scale.x = size_x
+    marker.scale.y = size_y
+    marker.scale.z = 1.0
+    marker.color.r = 0.0
+    marker.color.g = 1.0
+    marker.color.b = 0.0
+    marker.color.a = 1.0
+    marker.pose.position.x = x
+    marker.pose.position.y = y
+    marker.pose.position.z = 0
+    marker.pose.orientation.x = 0.0
+    marker.pose.orientation.y = 0.0
+    marker.pose.orientation.z = 5.0
+    marker.pose.orientation.w = 1.0
+
+    global marker_array
+    marker_array.markers.append(marker)
+    print(type(marker_array))
 
 
 if __name__ == "__main__":
-    if not robot:
+    if not robot and not ros:
         # Without ros
         print(cv2.__version__)
         image = cv2.imread('../arucoTemp.jpg')
         callback_image(image)
         rospy.spin()
-    else:
+
+    elif robot:
         initialize_ros()
         initialize_motion()
 
@@ -357,3 +406,9 @@ if __name__ == "__main__":
         main_loop()
 
         speech.say("Good bye!")
+
+    elif ros and not robot:
+        initialize_ros()
+        # create_marker(0, 2, 3, 1, 1)
+        # create_marker(1, 0.2, 0.3, 5, 3)
+        main_loop()
