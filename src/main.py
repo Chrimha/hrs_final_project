@@ -5,12 +5,6 @@ from sensor_msgs.msg import Image
 from sensor_msgs.msg import Range
 from cv_bridge import CvBridge, CvBridgeError
 import numpy as np
-
-# Disable at home
-import cv2
-import naoqi_bridge_msgs.msg
-from naoqi import ALProxy
-
 import std_msgs.msg
 import std_srvs.srv
 import os
@@ -18,23 +12,32 @@ import random
 import time
 from visualization_msgs.msg import MarkerArray
 from visualization_msgs.msg import Marker
+from rrt import RRT
+import matplotlib.pyplot as plt
 
+# Disable at home
+# import cv2
+# import naoqi_bridge_msgs.msg
+# from naoqi import ALProxy
 
+# Declaration of variables
 robot = False
 ros = True
 
+# The state of the traffic light (False = red,  True = green)
+traffic_light = False
+
+contact = False
+pose = False
+end = False
+obstacles = []
+
+visual_pub = None
+marker_array = MarkerArray()
 if robot:
     motion = ALProxy("ALMotion", "nao.local", 9559)
     speech = ALProxy("ALTextToSpeech", "nao.local", 9559)
     posture = ALProxy("ALRobotPosture", "nao.local", 9559)
-
-# The state of the traffic light (False = red,  True = green)
-traffic_light = False
-contact = False
-pose = False
-end = False
-visual_pub = None
-marker_array = MarkerArray()
 
 
 def initialize_ros():
@@ -330,6 +333,35 @@ def callback_footcontact(data):
     contact = data.data
 
 
+def calculate_trajectory(gx, gy):
+    global obstacles
+
+    print("Calculating trajectory...")
+    show_animation = True
+
+    rrt = RRT(
+        start=[0, 0],
+        goal=[gx, gy],
+        max_iter=100,
+        obstacle_list=obstacles
+        )
+    path = rrt.planning(animation=show_animation)
+    print(path)
+
+    if path is None:
+        print("Cannot find path")
+    else:
+        print("Found path!!")
+
+        # Draw final path
+        if show_animation:
+            rrt.draw_graph()
+            plt.plot([x for (x, y) in path], [y for (x, y) in path], '-r')
+            plt.grid(True)
+            plt.pause(0.01)
+            plt.show()
+
+
 def recover():
     global pose
     if not contact:
@@ -352,23 +384,29 @@ def recover():
 
 def main_loop():
     global marker_array
-    while not end:
-        if robot:
-            recover()
 
-        if marker_array:
-            visual_pub.publish(marker_array)
+    calculate_trajectory(10, 10)
+
+    try:
+        while not end:
+            if robot:
+                recover()
+
+            if marker_array:
+                visual_pub.publish(marker_array)
+    except KeyboardInterrupt:
+        pass
 
     if robot:
         motion.rest()
 
 
-def create_marker(id, size_x, size_y, x, y):
+def create_marker(number, size_x, size_y, x, y):
     marker = Marker()
     marker.header.frame_id = "/map"
     marker.header.stamp = rospy.Time.now()
     marker.type = 1
-    marker.id = id
+    marker.id = number
     marker.scale.x = size_x
     marker.scale.y = size_y
     marker.scale.z = 1.0
@@ -385,8 +423,9 @@ def create_marker(id, size_x, size_y, x, y):
     marker.pose.orientation.w = 1.0
 
     global marker_array
+    global obstacles
     marker_array.markers.append(marker)
-    print(type(marker_array))
+    obstacles.append([marker.pose.position.x, marker.pose.position.y, max(marker.scale.x, marker.scale.y) + 1])
 
 
 if __name__ == "__main__":
@@ -409,6 +448,7 @@ if __name__ == "__main__":
 
     elif ros and not robot:
         initialize_ros()
-        # create_marker(0, 2, 3, 1, 1)
-        # create_marker(1, 0.2, 0.3, 5, 3)
+        create_marker(0, 0.2, 0.1, 2, 3)  # (id, size_x, size_y, x, y)
+        create_marker(1, 0.2, 0.3, 8, 7)
+
         main_loop()
