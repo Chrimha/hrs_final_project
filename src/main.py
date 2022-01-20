@@ -1,10 +1,13 @@
 #!/usr/bin/env python
 from __future__ import print_function
 import rospy
+import cv2
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import Range
 from cv_bridge import CvBridge, CvBridgeError
 import numpy as np
+import naoqi_bridge_msgs.msg
+from naoqi import ALProxy
 import std_msgs.msg
 import std_srvs.srv
 import os
@@ -17,14 +20,14 @@ from geometry_msgs.msg import PoseStamped
 from rrt import RRT
 import matplotlib.pyplot as plt
 
-# Disable at home
-# import cv2
-# import naoqi_bridge_msgs.msg
-# from naoqi import ALProxy
-
-# Declaration of variables
+#Real-time camera image
+live_image = 0
 robot = False
 ros = True
+if robot:
+    motion = ALProxy("ALMotion", "nao.local", 9559)
+    speech = ALProxy("ALTextToSpeech", "nao.local", 9559)
+    posture = ALProxy("ALRobotPosture", "nao.local", 9559)
 
 # The state of the traffic light (False = red,  True = green)
 traffic_light = False
@@ -64,12 +67,12 @@ def initialize_ros():
         # walk_pub = rospy.Publisher('/cmd_pose', geometry_msgs.Pose2D, queue_size=3)
 
         # Services
-        rospy.wait_for_service('/start_recognition')
-        recognition_start_srv = rospy.ServiceProxy('/start_recognition', std_srvs.srv.Empty())
-        rospy.wait_for_service('/stop_recognition')
-        recognition_stop_srv = rospy.ServiceProxy('/stop_recognition', std_srvs.srv.Empty())
-        rospy.wait_for_service('/stop_walk_srv')
-        stop_walk_srv = rospy.ServiceProxy('/stop_walk_srv', std_srvs.srv.Empty())
+        # rospy.wait_for_service('/start_recognition')
+        # recognition_start_srv = rospy.ServiceProxy('/start_recognition', std_srvs.srv.Empty())
+        # rospy.wait_for_service('/stop_recognition')
+        # recognition_stop_srv = rospy.ServiceProxy('/stop_recognition', std_srvs.srv.Empty())
+        # rospy.wait_for_service('/stop_walk_srv')
+        # stop_walk_srv = rospy.ServiceProxy('/stop_walk_srv', std_srvs.srv.Empty())
 
         speech.say("Hello, how are you?")
 
@@ -90,6 +93,7 @@ def initialize_motion():
 
 def callback_image(data):
     global traffic_light
+    global live_image
     bridge = CvBridge()
     cv_image_color = bridge.imgmsg_to_cv2(data, "bgr8")
 
@@ -102,42 +106,107 @@ def callback_image(data):
     # Convert into HSV
     HSV_image = cv2.cvtColor(cv_image_color, cv2.COLOR_BGR2HSV)
 
-    crop = crop_img(cv_image_color, HSV_image)
     cv_image_color = check_color(HSV_image, cv_image_color)
     cv_image_color, tvec = detect_aruco(cv_image_color)
 
     print(tvec)
-
+    live_image = cv_image_color
     # Show images
-    cv2.imshow("Camera", cv_image_color)
+    #cv2.imshow("Camera", cv_image_color)
+    #cv2.waitKey()
 
-    cv2.waitKey(3)
+    return
 
+def measure_distance(crop_img):
+    lower_yellow = np.array([10, 90, 220])
+    upper_yellow = np.array([45, 255, 255])
+    print("measure distance")
+    pixel_width_1_5m = 35
+    img_hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
+    mask_yellow = cv2.inRange(img_hsv, lower_yellow, upper_yellow)
 
-def crop_img(cv_image_color, HSV_image):
+    (rows, cols, channels) = crop_img.shape
+    if cols > 60 and rows > 60:
+        cv2.circle(crop_img, (50, 50), 10, 255)
 
-    lower_yellow = np.array([22, 93, 0])
+    cv2.imshow("Img HSV 1", img_hsv)
+    cv2.waitKey()
+
+    # Show only yellow pixels
+    cv2.imshow("Color  Extraction 1", mask_yellow)
+    cv2.waitKey()
+
+    height = mask_yellow.shape[0]
+    width = mask_yellow.shape[1]
+
+    num_of_white_pix = 0
+    x_val_white = [0] * 1000000
+    y_val_white = [0] * 1000000
+
+    for x in range(mask_yellow.shape[1]):
+        for y in range(mask_yellow.shape[0]):
+            if mask_yellow[y][x]:
+                x_val_white[num_of_white_pix] = x
+                y_val_white[num_of_white_pix] = y
+                num_of_white_pix = num_of_white_pix + 1
+
+    x_val_white = np.copy(x_val_white)
+    y_val_white = np.copy(y_val_white)
+
+    x_min_mask = np.min(x_val_white[np.nonzero(x_val_white)])
+    x_max_mask = np.max(x_val_white[np.nonzero(x_val_white)])
+    y_max_mask = np.max(y_val_white[np.nonzero(y_val_white)])
+    y_min_mask = np.min(y_val_white[np.nonzero(y_val_white)])
+
+    print(x_max_mask - x_min_mask, "Width of traffic light")
+    distance_to_robot = -0.02874*(x_max_mask - x_min_mask) + 2.656
+
+    print("Traffic Light at (m): ", distance_to_robot)
+
+    return
+
+def crop_img():
+
+    global live_image
+    cv_image_color = live_image
+    print(cv_image_color)
+    lower_yellow = np.array([10, 90, 240])
     upper_yellow = np.array([45, 255, 255])
 
-    # img_hsv = cv2.cvtColor(cv_image_color, cv2.COLOR_BGR2HSV)
-    mask_yellow = cv2.inRange(HSV_image, lower_yellow, upper_yellow)
+    #lower_yellow = np.array([10, 90, 220])
+    #upper_yellow = np.array([45, 255, 255])
+
+    cv2.imshow("Img HSV2", cv_image_color)
+    cv2.waitKey()
+
+    # lower_yellow = np.array([10, 140, 180])
+    # upper_yellow = np.array([45, 255 , 255])
+
+    # lower_yellow = np.array([10, 150, 180])
+    # upper_yellow = np.array([45, 255 , 255])
+
+    # lower_yellow = np.array([22, 93, 0])
+    # upper_yellow = np.array([45, 255 , 255])
+    img_hsv = cv2.cvtColor(cv_image_color, cv2.COLOR_BGR2HSV)
+    mask_yellow = cv2.inRange(img_hsv, lower_yellow, upper_yellow)
 
     (rows, cols, channels) = cv_image_color.shape
     if cols > 60 and rows > 60:
         cv2.circle(cv_image_color, (50, 50), 10, 255)
+    print("now")
 
-    # cv2.imshow("Input Image", cv_image_color)
-    # cv2.waitKey()
+    cv2.imshow("Input Image 1", cv_image_color)
+    cv2.waitKey()
 
-    # cv2.imshow("Img HSV", img_hsv)
-    # cv2.waitKey()
+    cv2.imshow("Img HSV", img_hsv)
+    cv2.waitKey()
 
     # Show only yellow pixels
-    # cv2.imshow("Color  Extraction", mask_yellow)
-    # cv2.waitKey()
+    cv2.imshow("Color  Extraction", mask_yellow)
+    cv2.waitKey()
 
     # Image kernel
-    kernel_er = np.ones((5, 5), 'uint8')
+    kernel_er = np.ones((1, 1), 'uint8')
 
     # Erode + Dilate picture to form proper Blobs
     erode_img = cv2.erode(mask_yellow, kernel_er)
@@ -148,8 +217,10 @@ def crop_img(cv_image_color, HSV_image):
     # Invert colors in image so no black blobs are detected
     threshold = cv2.threshold(dilate_img, 200, 255, cv2.THRESH_BINARY)[1]
 
+    cv2.imshow("threshold", threshold)
+    cv2.waitKey()
     # Find contours in picture
-    (_, cnts, _) = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    (_, cnts, _) = cv2.findContours(threshold, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
     # Find largest contour
     if cnts != []:
@@ -197,15 +268,20 @@ def crop_img(cv_image_color, HSV_image):
 
     x = np.copy(x)
     y = np.copy(y)
-
-    x_min = np.min(x[np.nonzero(x)])
-    x_max = np.max(x[np.nonzero(x)])
-    y_max = np.max(y[np.nonzero(y)])
-    y_min = np.min(y[np.nonzero(y)])
+    borders = -5;
+    x_min = np.min(x[np.nonzero(x)]) - borders
+    x_max = np.max(x[np.nonzero(x)]) + borders
+    y_max = np.max(y[np.nonzero(y)]) + borders
+    y_min = np.min(y[np.nonzero(y)]) - borders
 
     crop_img = cv_image_color[y_min:y_max, x_min:x_max]
     cv2.imshow("cropped", crop_img)
+    print("here")
+    cv2.waitKey()
 
+
+
+    measure_distance(crop_img)
     return crop_img
 
 
@@ -468,11 +544,15 @@ if __name__ == "__main__":
 
     elif robot:
         initialize_ros()
-        initialize_motion()
+        #initialize_motion()
+        #motion.moveTo(0.5, 0, 0)
+        rospy.sleep(5)
 
-        motion.moveTo(0.5, 0, 0)
+        crop_img()
 
-        main_loop()
+        #rospy.spin()
+        #main_loop()
+
 
         speech.say("Good bye!")
 
