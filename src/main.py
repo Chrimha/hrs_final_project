@@ -14,6 +14,7 @@ from visualization_msgs.msg import MarkerArray
 from visualization_msgs.msg import Marker
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
+import tf
 from rrt import RRT
 import matplotlib.pyplot as plt
 
@@ -36,6 +37,7 @@ obstacles = []
 
 visual_pub = None
 path_pub = None
+world_frame = None
 path_msg = None
 marker_array = MarkerArray()
 if robot:
@@ -47,6 +49,7 @@ if robot:
 def initialize_ros():
     global visual_pub
     global path_pub
+    global world_frame
     rospy.init_node('guidenao', anonymous=True)
 
     if robot:
@@ -76,6 +79,7 @@ def initialize_ros():
     # Publishers for visualisation in rviz
     path_pub = rospy.Publisher('/path', Path, queue_size=3)
     visual_pub = rospy.Publisher('visualization_marker_array', MarkerArray, queue_size=3)
+    world_frame = tf.TransformBroadcaster()
 
 
 def initialize_motion():
@@ -353,8 +357,22 @@ def calculate_trajectory(gx, gy):
         max_iter=100,
         obstacle_list=obstacles
         )
-    path = rrt.planning(animation=show_animation)
-    print(path)
+    paths = []
+    path_len = []
+    if show_animation:
+        iterations = 1
+    else:
+        iterations = 100
+
+    for i in range(iterations):
+        path = rrt.planning(animation=show_animation)
+        if path is not None:
+            paths.append(path)
+            path_len.append(len(path))
+
+    path = paths[np.argmin(path_len)]
+
+    print(len(path))
 
     if path is None:
         print("Cannot find path")
@@ -380,12 +398,6 @@ def calculate_trajectory(gx, gy):
             pos.pose.position.y = wp[1]
             pos.pose.position.z = 0
 
-            #quaternion = tf.transformations.quaternion_from_euler(
-            #    0, 0, -math.radians(wp[0].transform.rotation.yaw))
-            #pos.pose.orientation.x = quaternion[0]
-            #pos.pose.orientation.y = quaternion[1]
-            #pos.pose.orientation.z = quaternion[2]
-            #pos.pose.orientation.w = quaternion[3]
             msg.poses.append(pos)
             path_msg = msg
 
@@ -413,6 +425,7 @@ def recover():
 def main_loop():
     global marker_array
     global path_msg
+    global world_frame
 
     calculate_trajectory(10, 10)
 
@@ -424,6 +437,7 @@ def main_loop():
             if marker_array:
                 visual_pub.publish(marker_array)
                 path_pub.publish(path_msg)
+                world_frame.sendTransform((0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 1.0), rospy.Time.now(), "world_frame", "map")
     except KeyboardInterrupt:
         print("Closing")
 

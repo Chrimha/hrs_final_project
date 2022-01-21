@@ -125,7 +125,7 @@ class RRT:
 
         n_expand = math.floor(extend_length / self.path_resolution)
 
-        for _ in range(n_expand):
+        for _ in range(int(n_expand)):
             new_node.x += self.path_resolution * math.cos(theta)
             new_node.y += self.path_resolution * math.sin(theta)
             new_node.path_x.append(new_node.x)
