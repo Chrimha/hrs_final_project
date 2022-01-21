@@ -37,7 +37,8 @@ obstacles = []
 
 visual_pub = None
 path_pub = None
-world_frame = None
+world_frame_pub = None
+robot_pos = [0, 0, 0]  # x, y, theta
 path_msg = None
 marker_array = MarkerArray()
 if robot:
@@ -49,7 +50,7 @@ if robot:
 def initialize_ros():
     global visual_pub
     global path_pub
-    global world_frame
+    global world_frame_pub
     rospy.init_node('guidenao', anonymous=True)
 
     if robot:
@@ -79,7 +80,7 @@ def initialize_ros():
     # Publishers for visualisation in rviz
     path_pub = rospy.Publisher('/path', Path, queue_size=3)
     visual_pub = rospy.Publisher('visualization_marker_array', MarkerArray, queue_size=3)
-    world_frame = tf.TransformBroadcaster()
+    world_frame_pub = tf.TransformBroadcaster()
 
 
 def initialize_motion():
@@ -214,6 +215,7 @@ def crop_img(cv_image_color, HSV_image):
 
 
 def detect_aruco(cv_image_color2):
+    global robot_pos
 
     # Create numpy arrays containing dist. coeff. and cam. coeff. for estimatePoseSingleMarkers and Drawaxis
     distortion_coefficients = np.zeros((1, 5, 1), dtype="float")
@@ -238,6 +240,9 @@ def detect_aruco(cv_image_color2):
     arucoDict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_ARUCO_ORIGINAL)
     arucoParam = cv2.aruco.DetectorParameters_create()
     corners, ids, rejected = cv2.aruco.detectMarkers(gray, arucoDict, parameters=arucoParam)
+
+    # ToDo: marker with id x is -world_frame_transform
+    #  robot_pos = world_frame_transform
 
     tvecs = []
 
@@ -344,7 +349,7 @@ def callback_footcontact(data):
     contact = data.data
 
 
-def calculate_trajectory(gx, gy):
+def calculate_trajectory(gx, gy, sx, sy):
     global obstacles
     global path_msg
 
@@ -352,7 +357,7 @@ def calculate_trajectory(gx, gy):
     show_animation = False
 
     rrt = RRT(
-        start=[0, 0],
+        start=[sx, sy],
         goal=[gx, gy],
         max_iter=100,
         obstacle_list=obstacles
@@ -388,7 +393,7 @@ def calculate_trajectory(gx, gy):
             plt.show()
 
     msg = Path()
-    msg.header.frame_id = "map"
+    msg.header.frame_id = "world_frame"
     msg.header.stamp = rospy.Time.now()
 
     if path is not None:
@@ -425,9 +430,13 @@ def recover():
 def main_loop():
     global marker_array
     global path_msg
-    global world_frame
+    global world_frame_pub
+    global robot_pos
 
-    calculate_trajectory(10, 10)
+    create_robot_marker(0, 0, 0)
+
+    # calculate_trajectory(10, 10, robot_pos[0], robot_pos[1])
+    calculate_trajectory(10, 10, 0, 0)
 
     try:
         while not end:
@@ -437,7 +446,9 @@ def main_loop():
             if marker_array:
                 visual_pub.publish(marker_array)
                 path_pub.publish(path_msg)
-                world_frame.sendTransform((0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 1.0), rospy.Time.now(), "world_frame", "map")
+
+                # ToDo: set world_frame to aruco
+                world_frame_pub.sendTransform((0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 1.0), rospy.Time.now(), "world_frame", "map")
     except KeyboardInterrupt:
         print("Closing")
 
@@ -447,7 +458,8 @@ def main_loop():
 
 def create_marker(number, size_x, size_y, x, y):
     marker = Marker()
-    marker.header.frame_id = "/map"
+    # ToDo: test with frame_id = "torso"
+    marker.header.frame_id = "/world_frame"
     marker.header.stamp = rospy.Time.now()
     marker.type = 1
     marker.id = number
@@ -470,6 +482,31 @@ def create_marker(number, size_x, size_y, x, y):
     global obstacles
     marker_array.markers.append(marker)
     obstacles.append([marker.pose.position.x, marker.pose.position.y, max(marker.scale.x, marker.scale.y) + 1])
+
+
+def create_robot_marker(x, y, theta):
+    marker = Marker()
+    marker.header.frame_id = "/world_frame"
+    marker.header.stamp = rospy.Time.now()
+    marker.type = 1
+    marker.id = -1
+    marker.scale.x = 0.6
+    marker.scale.y = 0.5
+    marker.scale.z = 0.7
+    marker.color.r = 0.0
+    marker.color.g = 0.0
+    marker.color.b = 1.0
+    marker.color.a = 1.0
+    marker.pose.position.x = x
+    marker.pose.position.y = y
+    marker.pose.position.z = 0
+    marker.pose.orientation.x = 0.0
+    marker.pose.orientation.y = 0.0
+    marker.pose.orientation.z = theta
+    marker.pose.orientation.w = 1.0
+
+    global marker_array
+    marker_array.markers.append(marker)
 
 
 if __name__ == "__main__":
