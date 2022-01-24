@@ -38,9 +38,13 @@ obstacles = []
 visual_pub = None
 path_pub = None
 world_frame_pub = None
+world_frame_pos = []  # x, y, z
 robot_pos = [0, 0, 0]  # x, y, theta
 path_msg = None
 marker_array = MarkerArray()
+recalc_trajectory = False
+old_num_obstacles = 0
+
 if robot:
     motion = ALProxy("ALMotion", "nao.local", 9559)
     speech = ALProxy("ALTextToSpeech", "nao.local", 9559)
@@ -216,6 +220,9 @@ def crop_img(cv_image_color, HSV_image):
 
 def detect_aruco(cv_image_color2):
     global robot_pos
+    global old_num_obstacles
+    global recalc_trajectory
+    global world_frame_pos
 
     # Create numpy arrays containing dist. coeff. and cam. coeff. for estimatePoseSingleMarkers and Drawaxis
     distortion_coefficients = np.zeros((1, 5, 1), dtype="float")
@@ -241,8 +248,6 @@ def detect_aruco(cv_image_color2):
     arucoParam = cv2.aruco.DetectorParameters_create()
     corners, ids, rejected = cv2.aruco.detectMarkers(gray, arucoDict, parameters=arucoParam)
 
-    # ToDo: marker with id x is -world_frame_transform
-    #  robot_pos = world_frame_transform
 
     tvecs = []
 
@@ -257,8 +262,21 @@ def detect_aruco(cv_image_color2):
                                0.01)  # Draw Axis
             tvecs.append(tvec)
 
-            # ToDo
+            # ToDo: world_frame not poped...
             # create_marker(i, 1.0, 1.0, tvec[0], tvec[1])
+
+    # ToDo: marker with id x is -world_frame_transform. TEST
+    print(ids)
+    if 1 in ids:
+        i = ids.index(1)
+        if not world_frame_pos:
+            world_frame_pos = tvecs[0][0][i]
+        robot_pos = -tvecs[0][0][i]
+        tvecs[0][0].pop(i)
+
+    if len(tvecs[0][0]) > old_num_obstacles:
+        recalc_trajectory = True
+    old_num_obstacles = len(tvecs[0][0])
 
     return cv_image_color2, tvecs
 
@@ -364,19 +382,24 @@ def calculate_trajectory(gx, gy, sx, sy):
         )
     paths = []
     path_len = []
+    path_lengths = []
     if show_animation:
         iterations = 1
     else:
-        iterations = 100
+        iterations = 500
 
     for i in range(iterations):
         path = rrt.planning(animation=show_animation)
         if path is not None:
             paths.append(path)
             path_len.append(len(path))
+            path_lengths.append(calc_path_length(path))
 
-    path = paths[np.argmin(path_len)]
+    # ToDo:test
+    # path = paths[np.argmin(path_len)]
+    path = paths[np.argmin(path_lengths)]
 
+    print(calc_path_length(path))
     print(len(path))
 
     if path is None:
@@ -407,6 +430,13 @@ def calculate_trajectory(gx, gy, sx, sy):
             path_msg = msg
 
 
+def calc_path_length(path):
+    x = 0
+    for i in range(1, len(path)):
+        x += np.linalg.norm(np.add(path[i], np.negative(path[i-1])))
+    return x
+
+
 def recover():
     global pose
     if not contact:
@@ -433,7 +463,6 @@ def main_loop():
     global world_frame_pub
     global robot_pos
 
-    create_robot_marker(0, 0, 0)
 
     # calculate_trajectory(10, 10, robot_pos[0], robot_pos[1])
     calculate_trajectory(10, 10, 0, 0)
@@ -443,11 +472,18 @@ def main_loop():
             if robot:
                 recover()
 
+            if recalc_trajectory:
+                calculate_trajectory(10, 10, 0, 0)
+
             if marker_array:
+                # ToDo: can lead to errors if obstacles are added between these three lines
+                create_robot_marker()
                 visual_pub.publish(marker_array)
+                marker_array.markers.pop()
+
                 path_pub.publish(path_msg)
 
-                # ToDo: set world_frame to aruco
+                # ToDo: set world_frame to aruco. Once or everytime?
                 world_frame_pub.sendTransform((0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 1.0), rospy.Time.now(), "world_frame", "map")
     except KeyboardInterrupt:
         print("Closing")
@@ -457,8 +493,9 @@ def main_loop():
 
 
 def create_marker(number, size_x, size_y, x, y):
+    global robot_pos
+
     marker = Marker()
-    # ToDo: test with frame_id = "torso"
     marker.header.frame_id = "/world_frame"
     marker.header.stamp = rospy.Time.now()
     marker.type = 1
@@ -470,8 +507,8 @@ def create_marker(number, size_x, size_y, x, y):
     marker.color.g = 1.0
     marker.color.b = 0.0
     marker.color.a = 1.0
-    marker.pose.position.x = x
-    marker.pose.position.y = y
+    marker.pose.position.x = x + robot_pos[0]
+    marker.pose.position.y = y + robot_pos[1]
     marker.pose.position.z = 0
     marker.pose.orientation.x = 0.0
     marker.pose.orientation.y = 0.0
@@ -480,11 +517,12 @@ def create_marker(number, size_x, size_y, x, y):
 
     global marker_array
     global obstacles
+    # ToDo: list of obstacles grows every iteration. Bug or feature?
     marker_array.markers.append(marker)
     obstacles.append([marker.pose.position.x, marker.pose.position.y, max(marker.scale.x, marker.scale.y) + 1])
 
 
-def create_robot_marker(x, y, theta):
+def create_robot_marker():
     marker = Marker()
     marker.header.frame_id = "/world_frame"
     marker.header.stamp = rospy.Time.now()
@@ -497,12 +535,12 @@ def create_robot_marker(x, y, theta):
     marker.color.g = 0.0
     marker.color.b = 1.0
     marker.color.a = 1.0
-    marker.pose.position.x = x
-    marker.pose.position.y = y
+    marker.pose.position.x = -robot_pos[0]
+    marker.pose.position.y = -robot_pos[1]
     marker.pose.position.z = 0
     marker.pose.orientation.x = 0.0
     marker.pose.orientation.y = 0.0
-    marker.pose.orientation.z = theta
+    marker.pose.orientation.z = robot_pos[2]
     marker.pose.orientation.w = 1.0
 
     global marker_array
