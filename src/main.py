@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 from __future__ import print_function
+
+import math
+
 import rospy
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import Range
@@ -18,17 +21,18 @@ import threading
 import tf
 from rrt import RRT
 import matplotlib.pyplot as plt
+# from scipy.spatial.transform import Rotation as R
 
 # Disable at home
-# import cv2
-# import naoqi_bridge_msgs.msg
-# from naoqi import ALProxy
+import cv2
+import naoqi_bridge_msgs.msg
+from naoqi import ALProxy
 
 # Declaration of variables
 
 #Real-time camera image
 live_image = 0
-robot = False
+robot = True
 ros = True
 
 # The state of the traffic light (False = red,  True = green)
@@ -41,13 +45,15 @@ obstacles = []
 
 visual_pub = None
 path_pub = None
+path = []
 world_frame_pub = None
 world_frame_pos = []  # x, y, z
+world_frame_rot = []
 robot_pos = [0, 0, 0]  # x, y, theta
 path_msg = None
 marker_array = MarkerArray()
 recalc_trajectory = False
-old_num_obstacles = 0
+old_num_obstacles = 1000000000
 
 if robot:
     motion = ALProxy("ALMotion", "nao.local", 9559)
@@ -101,6 +107,26 @@ def initialize_motion():
     speech.say("lets go!")
 
 
+def get_quaternion_from_euler(roll, pitch, yaw):
+    """
+    Convert an Euler angle to a quaternion.
+
+    Input
+      :param roll: The roll (rotation around x-axis) angle in radians.
+      :param pitch: The pitch (rotation around y-axis) angle in radians.
+      :param yaw: The yaw (rotation around z-axis) angle in radians.
+
+    Output
+      :return qx, qy, qz, qw: The orientation in quaternion [x,y,z,w] format
+    """
+    qx = np.sin(roll / 2) * np.cos(pitch / 2) * np.cos(yaw / 2) - np.cos(roll / 2) * np.sin(pitch / 2) * np.sin(yaw / 2)
+    qy = np.cos(roll / 2) * np.sin(pitch / 2) * np.cos(yaw / 2) + np.sin(roll / 2) * np.cos(pitch / 2) * np.sin(yaw / 2)
+    qz = np.cos(roll / 2) * np.cos(pitch / 2) * np.sin(yaw / 2) - np.sin(roll / 2) * np.sin(pitch / 2) * np.cos(yaw / 2)
+    qw = np.cos(roll / 2) * np.cos(pitch / 2) * np.cos(yaw / 2) + np.sin(roll / 2) * np.sin(pitch / 2) * np.sin(yaw / 2)
+
+    return [qx, qy, qz, qw]
+
+
 def callback_image(data):
     global traffic_light
     global live_image
@@ -122,8 +148,8 @@ def callback_image(data):
     # print(tvec)
     live_image = cv_image_color
     # Show images
-    #cv2.imshow("Camera", cv_image_color)
-    #cv2.waitKey()
+    cv2.imshow("Camera", cv_image_color)
+    cv2.waitKey(2)
 
     return
 
@@ -140,12 +166,21 @@ def measure_distance(crop_img):
     if cols > 60 and rows > 60:
         cv2.circle(crop_img, (50, 50), 10, 255)
 
-    cv2.imshow("Img HSV 1", img_hsv)
-    cv2.waitKey()
+    # cv2.imshow("Img HSV 1", img_hsv)
+    # cv2.waitKey()
 
     # Show only yellow pixels
-    cv2.imshow("Color  Extraction 1", mask_yellow)
-    cv2.waitKey()
+    # cv2.imshow("Color  Extraction 1", mask_yellow)
+    # cv2.waitKey()
+
+    # Remove noise from cropped traffic light
+    kernel = np.ones((2, 1), np.uint8)
+
+    mask_yellow = cv2.erode(mask_yellow, kernel, iterations=1)
+    mask_yellow = cv2.dilate(mask_yellow, kernel, iterations=1)
+
+    #cv2.imshow('Clean Image', mask_yellow)
+    #cv2.waitKey(3)
 
     height = mask_yellow.shape[0]
     width = mask_yellow.shape[1]
@@ -181,7 +216,6 @@ def crop_img():
 
     global live_image
     cv_image_color = live_image
-    # print(cv_image_color)
     lower_yellow = np.array([10, 90, 240])
     upper_yellow = np.array([45, 255, 255])
 
@@ -287,8 +321,8 @@ def crop_img():
     y_min = np.min(y[np.nonzero(y)]) - borders
 
     crop_img = cv_image_color[y_min:y_max, x_min:x_max]
-    cv2.imshow("cropped", crop_img)
-    cv2.waitKey()
+    # cv2.imshow("cropped", crop_img)
+    # cv2.waitKey()
 
     # ToDo
     return measure_distance(crop_img), 0
@@ -299,8 +333,30 @@ def detect_aruco(cv_image_color2):
     global old_num_obstacles
     global recalc_trajectory
     global world_frame_pos
+    global world_frame_rot
 
     # Create numpy arrays containing dist. coeff. and cam. coeff. for estimatePoseSingleMarkers and Drawaxis
+    datad = {-0.0481869853715082, 0.0201858398559121, 0.0030362056699177, -0.00172241952442813, 0};
+    datac = {278.236008818534, 0, 156.194471689706, 0, 279.380102992049, 126.007123836447, 0, 0, 1};
+
+    distortion_coefficients = np.zeros((1, 5, 1), dtype="float")
+    distortion_coefficients[0, 0] = -0.0481869853715082
+    distortion_coefficients[0, 1] = 0.0201858398559121
+    distortion_coefficients[0, 2] = 0.0030362056699177
+    distortion_coefficients[0, 3] = -0.00172241952442813
+    distortion_coefficients[0, 4] = 0.000000
+    camera_coefficients = np.zeros((3, 3, 1), dtype="float")
+    camera_coefficients[0, 0] = 278.236008818534
+    camera_coefficients[0, 1] = 0.000000
+    camera_coefficients[0, 2] = 156.194471689706
+    camera_coefficients[1, 0] = 0.000000
+    camera_coefficients[1, 1] = 279.380102992049
+    camera_coefficients[1, 2] = 126.007123836447
+    camera_coefficients[2, 0] = 0.000000
+    camera_coefficients[2, 1] = 0.000000
+    camera_coefficients[2, 2] = 1.000000
+
+    '''
     distortion_coefficients = np.zeros((1, 5, 1), dtype="float")
     distortion_coefficients[0, 0] = -0.066494
     distortion_coefficients[0, 1] = 0.095481
@@ -317,6 +373,7 @@ def detect_aruco(cv_image_color2):
     camera_coefficients[2, 0] = 0.000000
     camera_coefficients[2, 1] = 0.000000
     camera_coefficients[2, 2] = 1.000000
+    '''
 
     # Detect Aruco Markers
     gray = cv2.cvtColor(cv_image_color2, cv2.COLOR_BGR2GRAY)
@@ -324,8 +381,8 @@ def detect_aruco(cv_image_color2):
     arucoParam = cv2.aruco.DetectorParameters_create()
     corners, ids, rejected = cv2.aruco.detectMarkers(gray, arucoDict, parameters=arucoParam)
 
-
     tvecs = []
+
 
     if np.all(ids is not None):  # If there are markers found by detector
         for i in range(0, len(ids)):  # Iterate in markers
@@ -337,28 +394,38 @@ def detect_aruco(cv_image_color2):
             cv2.aruco.drawAxis(cv_image_color2, camera_coefficients, distortion_coefficients, rvec, tvec,
                                0.01)  # Draw Axis
             tvec = tvec[0][0]
-            tvec[0] = -tvec[0] - 0.5
-            tvec[1] = -tvec[1] - 0.5
-            tvec[2] = tvec[2]/2
+            # tvec[0] = tvec[0] - 0.5
+            # tvec[1] = -tvec[1] - 0.5
+            # tvec[2] = tvec[2]/2
             tvecs.append(tvec)
-            #tvec -> x(horizontal + 0.5), y (vertical and z= (distance*2)
-            print(tvec)
+            # tvec -> x(horizontal + 0.5), y (vertical) and z= (distance*2)
+            # print(tvec)
 
             # ToDo: world_frame not poped...
             # create_marker(i, 1.0, 1.0, tvec[0], tvec[1])
 
-    # ToDo: marker with id x is -world_frame_transform. TEST
-    print(ids)
-    if 1 in ids:
-        i = ids.index(1)
-        if not world_frame_pos:
-            world_frame_pos = tvecs[0][0][i]
-        robot_pos = -tvecs[0][0][i]
-        tvecs[0][0].pop(i)
+    if ids is not None:
+        if 5 in ids:
+            i = np.where(ids == 5)
+            if len(world_frame_pos) < 2:
+                world_frame_pos = tvecs[i[0][0]]
+            robot_pos[0] = -tvecs[i[0][0]][0]
+            robot_pos[1] = -tvecs[i[0][0]][2]
+            robot_pos[2] = 0
 
-    if len(tvecs[0][0]) > old_num_obstacles:
+            #rotation_matrix = np.eye(4)
+            #rotation_matrix[0:3, 0:3] = cv2.Rodrigues(np.array(rvec[i][0]))[0]
+            #r = R.from_matrix(rotation_matrix[0:3, 0:3])
+            #quat = r.as_quat()
+
+            world_frame_rot = rvec[0][0]
+            # print(world_frame_rot)
+            tvecs.pop(i[0][0])
+            # ids.pop(i[0][0])
+
+    if len(tvecs) > old_num_obstacles:
         recalc_trajectory = True
-    old_num_obstacles = len(tvecs[0][0])
+    old_num_obstacles = len(tvecs)
 
     return cv_image_color2, tvecs
 
@@ -452,6 +519,7 @@ def callback_footcontact(data):
 def calculate_trajectory(gy, gx, sx, sy):
     global obstacles
     global path_msg
+    global recalc_trajectory
 
     print("Calculating trajectory...")
     show_animation = False
@@ -479,9 +547,10 @@ def calculate_trajectory(gy, gx, sx, sy):
 
     # ToDo:test
     # path = paths[np.argmin(path_len)]
-    path = paths[np.argmin(path_lengths)]
+    if path_lengths:
+        path = paths[np.argmin(path_lengths)]
 
-    print(calc_path_length(path))
+    # print(calc_path_length(path))
     print(len(path))
 
     if path is None:
@@ -510,6 +579,7 @@ def calculate_trajectory(gy, gx, sx, sy):
 
             msg.poses.append(pos)
             path_msg = msg
+        recalc_trajectory = False
         return path
     return None
 
@@ -550,27 +620,31 @@ def main_loop(gx, gy):
     global end
     global world_frame_pub
     global robot_pos
+    global recalc_trajectory
+    global path
 
     # path = calculate_trajectory(gx, gy)
     # calculate_trajectory(10, 10, robot_pos[0], robot_pos[1])
-    path = calculate_trajectory(gx, gy, 0, 0)
+    path = calculate_trajectory(gx, gy, robot_pos[0], robot_pos[1])
 
-    if path:
+    if path and robot:
+        print("walking")
         path.reverse()
-        x = threading.Thread(target=walk_path(path), args=(1,))
+        x = threading.Thread(target=walk_path(), args=(1,))
         # x.start()
         #walk_path(path)
+        print("done walking")
     else:
         end = True
     # motion.moveTo(1 * 0.83, 0, 0)
+    print("ffaseijdfiojfwklifawjeifawfiafjawifawiofhawfawhfio")
     try:
         while not end:
-            print("while")
             if robot:
                 recover()
 
             if recalc_trajectory:
-                calculate_trajectory(10, 10, 0, 0)
+                path = calculate_trajectory(gx, gy, robot_pos[0], robot_pos[1])
 
             if marker_array:
                 # ToDo: can lead to errors if obstacles are added between these three lines
@@ -581,7 +655,7 @@ def main_loop(gx, gy):
                 path_pub.publish(path_msg)
 
                 # ToDo: set world_frame to aruco. Once or everytime?
-                world_frame_pub.sendTransform((0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 1.0), rospy.Time.now(), "world_frame", "map")
+                world_frame_pub.sendTransform((0.0, 0.0, 0.0), get_quaternion_from_euler(math.degrees(world_frame_rot[0]), math.degrees(world_frame_rot[1]), math.degrees(world_frame_rot[2])), rospy.Time.now(), "world_frame", "map")
     except KeyboardInterrupt:
         print("Closing")
 
@@ -589,11 +663,17 @@ def main_loop(gx, gy):
         motion.rest()
 
 
-def walk_path(path):
+def walk_path():
     global robot_pos
-    motion.moveTo(path[0][1] * 0.83, -path[0][0] * 0.83, 0)
+    global path
+    for i in range(1, len(path)):
+        # waypoint = [path[i][1] * 0.83 + robot_pos[1] * 0.83, -path[i][0] * 0.83 + robot_pos[0], 0]
+        waypoint = [path[i][1] * 0.70 - robot_pos[1] * 0.7, -path[i][0] * 0.7 - robot_pos[0] * 0.7, 0]
+        print(waypoint)
+        motion.moveTo(waypoint)
+        time.sleep(10)
 
-    calculate_trajectory(gx, gy, robot_pos[0], robot_pos[1])
+        # path = calculate_trajectory(gx, gy, robot_pos[0], robot_pos[1])
 
 
 def create_marker(number, size_x, size_y, x, y):
@@ -652,6 +732,7 @@ def create_robot_marker():
 
 
 if __name__ == "__main__":
+
     if not robot and not ros:
         # Without ros
         print(cv2.__version__)
@@ -662,16 +743,21 @@ if __name__ == "__main__":
     elif robot:
         initialize_ros()
         initialize_motion()
-        rospy.sleep(2)
+        rospy.sleep(3)
         # 2.3m : 21
         # 2m : 24
         # 1.5m : 33
         # 1.1m : 44
         gx, gy = crop_img()
 
-        # rospy.spin()
-        main_loop(gx, gy)
+        create_marker(0, 0.2, 0.1, 2, 3)  # (id, size_x, size_y, x, y)
+        create_marker(1, 0.2, 0.3, 8, 7)
 
+        # rospy.spin()
+        # 2.05412+-2.52185047506   0+0.488096629433
+        # print(gx, robot_pos[1], gy,  robot_pos[0])
+        #main_loop(gx + robot_pos[1], gy + robot_pos[0])
+        main_loop(gx + robot_pos[1], 0)
 
         speech.say("Good bye!")
 
@@ -680,4 +766,4 @@ if __name__ == "__main__":
         create_marker(0, 0.2, 0.1, 2, 3)  # (id, size_x, size_y, x, y)
         create_marker(1, 0.2, 0.3, 8, 7)
 
-        main_loop()
+        main_loop(3, 0)
