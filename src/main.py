@@ -17,12 +17,13 @@ from visualization_msgs.msg import MarkerArray
 from visualization_msgs.msg import Marker
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
+import threading
 from rrt import RRT
 import matplotlib.pyplot as plt
 
 #Real-time camera image
 live_image = 0
-robot = False
+robot = True
 ros = True
 if robot:
     motion = ALProxy("ALMotion", "nao.local", 9559)
@@ -109,13 +110,14 @@ def callback_image(data):
     cv_image_color = check_color(HSV_image, cv_image_color)
     cv_image_color, tvec = detect_aruco(cv_image_color)
 
-    print(tvec)
+    # print(tvec)
     live_image = cv_image_color
     # Show images
     #cv2.imshow("Camera", cv_image_color)
     #cv2.waitKey()
 
     return
+
 
 def measure_distance(crop_img):
     lower_yellow = np.array([10, 90, 220])
@@ -159,25 +161,26 @@ def measure_distance(crop_img):
     y_min_mask = np.min(y_val_white[np.nonzero(y_val_white)])
 
     print(x_max_mask - x_min_mask, "Width of traffic light")
-    distance_to_robot = -0.02874*(x_max_mask - x_min_mask) + 2.656
+    distance_to_robot = -0.05062*(x_max_mask - x_min_mask) + 3.269
 
     print("Traffic Light at (m): ", distance_to_robot)
 
-    return
+    return distance_to_robot
+
 
 def crop_img():
 
     global live_image
     cv_image_color = live_image
-    print(cv_image_color)
+    # print(cv_image_color)
     lower_yellow = np.array([10, 90, 240])
     upper_yellow = np.array([45, 255, 255])
 
     #lower_yellow = np.array([10, 90, 220])
     #upper_yellow = np.array([45, 255, 255])
 
-    cv2.imshow("Img HSV2", cv_image_color)
-    cv2.waitKey()
+    #cv2.imshow("Img HSV2", cv_image_color)
+    #cv2.waitKey()
 
     # lower_yellow = np.array([10, 140, 180])
     # upper_yellow = np.array([45, 255 , 255])
@@ -195,15 +198,15 @@ def crop_img():
         cv2.circle(cv_image_color, (50, 50), 10, 255)
     print("now")
 
-    cv2.imshow("Input Image 1", cv_image_color)
-    cv2.waitKey()
+    #cv2.imshow("Input Image 1", cv_image_color)
+    #cv2.waitKey()
 
-    cv2.imshow("Img HSV", img_hsv)
-    cv2.waitKey()
+    #cv2.imshow("Img HSV", img_hsv)
+    #cv2.waitKey()
 
     # Show only yellow pixels
-    cv2.imshow("Color  Extraction", mask_yellow)
-    cv2.waitKey()
+    #cv2.imshow("Color  Extraction", mask_yellow)
+    #cv2.waitKey()
 
     # Image kernel
     kernel_er = np.ones((1, 1), 'uint8')
@@ -217,8 +220,8 @@ def crop_img():
     # Invert colors in image so no black blobs are detected
     threshold = cv2.threshold(dilate_img, 200, 255, cv2.THRESH_BINARY)[1]
 
-    cv2.imshow("threshold", threshold)
-    cv2.waitKey()
+    #cv2.imshow("threshold", threshold)
+    #cv2.waitKey()
     # Find contours in picture
     (_, cnts, _) = cv2.findContours(threshold, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -263,8 +266,8 @@ def crop_img():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (145, 200, 200))
         i = i + 1
 
-    cv2.imshow("Blob extraaction", dilate_img)
-    cv2.waitKey()
+    #cv2.imshow("Blob extraaction", dilate_img)
+    #cv2.waitKey()
 
     x = np.copy(x)
     y = np.copy(y)
@@ -276,13 +279,10 @@ def crop_img():
 
     crop_img = cv_image_color[y_min:y_max, x_min:x_max]
     cv2.imshow("cropped", crop_img)
-    print("here")
     cv2.waitKey()
 
-
-
-    measure_distance(crop_img)
-    return crop_img
+    # ToDo
+    return measure_distance(crop_img), 0
 
 
 def detect_aruco(cv_image_color2):
@@ -316,13 +316,19 @@ def detect_aruco(cv_image_color2):
     if np.all(ids is not None):  # If there are markers found by detector
         for i in range(0, len(ids)):  # Iterate in markers
             # Estimate pose of each marker and return the values rvec and tvec---different from camera coefficients
-            rvec, tvec, markerPoints = cv2.aruco.estimatePoseSingleMarkers(corners[i], 9, camera_coefficients,
+            rvec, tvec, markerPoints = cv2.aruco.estimatePoseSingleMarkers(corners[i], 0.09, camera_coefficients,
                                                                            distortion_coefficients)
             (rvec - tvec).any()  # get rid of that nasty numpy value array error
             cv2.aruco.drawDetectedMarkers(cv_image_color2, corners)  # Draw A square around the markers
             cv2.aruco.drawAxis(cv_image_color2, camera_coefficients, distortion_coefficients, rvec, tvec,
                                0.01)  # Draw Axis
+            tvec = tvec[0][0]
+            tvec[0] = -tvec[0] - 0.5
+            tvec[1] = -tvec[1] - 0.5
+            tvec[2] = tvec[2]/2
             tvecs.append(tvec)
+            #tvec -> x(horizontal + 0.5), y (vertical and z= (distance*2)
+            print(tvec)
 
             # ToDo
             # create_marker(i, 1.0, 1.0, tvec[0], tvec[1])
@@ -416,7 +422,7 @@ def callback_footcontact(data):
     contact = data.data
 
 
-def calculate_trajectory(gx, gy):
+def calculate_trajectory(gy, gx):
     global obstacles
     global path_msg
 
@@ -446,7 +452,7 @@ def calculate_trajectory(gx, gy):
             plt.show()
 
     msg = Path()
-    msg.header.frame_id = "map"
+    msg.header.frame_id = "torso"
     msg.header.stamp = rospy.Time.now()
 
     if path is not None:
@@ -464,13 +470,17 @@ def calculate_trajectory(gx, gy):
             #pos.pose.orientation.w = quaternion[3]
             msg.poses.append(pos)
             path_msg = msg
+        return path
+    return None
 
 
 def recover():
     global pose
+    global contact
     if not contact:
         pose = False
         speech.say("I lost my footing")
+        print("shufshrwrhjfiwjijiejdfiejfweifiofehjiodfwefhwhfsirihrihwrahwrhgwagho")
         for j in range(5):
             motion.setStiffnesses("Body", 0.0)
         time.sleep(10)
@@ -479,6 +489,7 @@ def recover():
         if not contact:
             posture.goToPosture("StandInit", 1.0)
             pose = True
+            contact = True
     else:
         if not pose:
             speech.say("Thank you for helping me up!")
@@ -486,14 +497,24 @@ def recover():
             pose = True
 
 
-def main_loop():
+def main_loop(gx, gy):
     global marker_array
     global path_msg
+    global end
 
-    calculate_trajectory(10, 10)
+    path = calculate_trajectory(gx, gy)
 
+    if path:
+        path.reverse()
+        x = threading.Thread(target=walk_path(path), args=(1,))
+        # x.start()
+        #walk_path(path)
+    else:
+        end = True
+    # motion.moveTo(1 * 0.83, 0, 0)
     try:
         while not end:
+            print("while")
             if robot:
                 recover()
 
@@ -507,9 +528,15 @@ def main_loop():
         motion.rest()
 
 
+def walk_path(path):
+    motion.moveTo(path[0][1] * 0.83, -path[0][0] * 0.83, 0)
+
+    calculate_trajectory(gx, gy)
+
+
 def create_marker(number, size_x, size_y, x, y):
     marker = Marker()
-    marker.header.frame_id = "/map"
+    marker.header.frame_id = "torso"
     marker.header.stamp = rospy.Time.now()
     marker.type = 1
     marker.id = number
@@ -531,7 +558,7 @@ def create_marker(number, size_x, size_y, x, y):
     global marker_array
     global obstacles
     marker_array.markers.append(marker)
-    obstacles.append([marker.pose.position.x, marker.pose.position.y, max(marker.scale.x, marker.scale.y) + 1])
+    obstacles.append([marker.pose.position.x, marker.pose.position.y, max(marker.scale.x, marker.scale.y) + 0.5])
 
 
 if __name__ == "__main__":
@@ -544,14 +571,16 @@ if __name__ == "__main__":
 
     elif robot:
         initialize_ros()
-        #initialize_motion()
-        #motion.moveTo(0.5, 0, 0)
-        rospy.sleep(5)
+        initialize_motion()
+        rospy.sleep(2)
+        # 2.3m : 21
+        # 2m : 24
+        # 1.5m : 33
+        # 1.1m : 44
+        gx, gy = crop_img()
 
-        crop_img()
-
-        #rospy.spin()
-        #main_loop()
+        # rospy.spin()
+        main_loop(gx, gy)
 
 
         speech.say("Good bye!")

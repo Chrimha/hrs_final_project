@@ -45,7 +45,7 @@ class RRT:
                  start,
                  goal,
                  obstacle_list,
-                 expand_dis=3.0,
+                 expand_dis=0.5,
                  path_resolution=0.5,
                  goal_sample_rate=5,
                  max_iter=500,
@@ -63,10 +63,10 @@ class RRT:
         """
         self.start = self.Node(start[0], start[1])
         self.end = self.Node(goal[0], goal[1])
-        self.min_rand_x = -7
-        self.max_rand_x = 7
+        self.min_rand_x = -1
+        self.max_rand_x = 1
         self.min_rand_y = -1
-        self.max_rand_y = 15
+        self.max_rand_y = 3
         if play_area is not None:
             self.play_area = self.AreaBounds(play_area)
         else:
@@ -125,7 +125,7 @@ class RRT:
 
         n_expand = math.floor(extend_length / self.path_resolution)
 
-        for _ in range(n_expand):
+        for _ in range(int(n_expand)):
             new_node.x += self.path_resolution * math.cos(theta)
             new_node.y += self.path_resolution * math.sin(theta)
             new_node.path_x.append(new_node.x)
@@ -193,7 +193,7 @@ class RRT:
         plt.plot(self.start.x, self.start.y, "xr")
         plt.plot(self.end.x, self.end.y, "xr")
         plt.axis("equal")
-        plt.axis([-7, 7, -2, 15])
+        plt.axis([-2, 2, -2, 4])
         plt.grid(True)
         plt.pause(0.01)
 
