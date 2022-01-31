@@ -278,7 +278,7 @@ def measure_distance(crop_img):
 
     print("Traffic Light at (m): ", distance_to_robot)
 
-    return 2.4
+    return distance_to_robot
 
 
 def crop_img():
