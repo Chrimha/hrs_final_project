@@ -38,16 +38,14 @@ from naoqi import ALProxy
 import glob  # Used to get retrieve files that have a specified pattern
 
 # Declaration of variables
-#robot_ip = "10.152.246.74" #red robot
-robot_ip = "10.152.246.134"
+robot_ip = "10.152.246.74" #red robot
+#robot_ip = "10.152.246.134" #Orange
 
 #Real-time camera image
 live_image = 0
 robot = True
 ros = True
 
-# The state of the traffic light (False = red,  True = green)
-traffic_light = False
 
 contact = True
 pose = False
@@ -82,7 +80,7 @@ status_button_2 = False
 status_button_3 = False
 counter_lost_touch = 0
 at_least_one_button = False
-contact_lost = True
+contact_lost = False
 speech = True
 
 goal_reached = False
@@ -188,30 +186,16 @@ def get_quaternion_from_euler(roll, pitch, yaw):
 
 
 def callback_image(data):
-    global traffic_light
     global live_image
-
 
     bridge = CvBridge()
     cv_image_color = bridge.imgmsg_to_cv2(data, "bgr8")
-
-    # cv2.imwrite('arucoTemp4.jpg', cv_image_color)
-
     (rows_b, cols_b, channels_b) = cv_image_color.shape
-
-    # canny_edges(cv_image_color)
-
-
-
-    #cv_image_color = check_color(HSV_image, cv_image_color)
     cv_image_color, tvec = detect_aruco(cv_image_color)
-
-    # print(tvec)
     live_image = cv_image_color
-    # Show images
-    #cv2.imshow("Camera", cv_image_color)
-    #cv2.waitKey(2)
 
+
+     # Save images for calibration
     #global cal_im_counter
     #if cal_im_counter % 50 == 0 and cal_im_counter < 1500:
     #    filename = str(cal_im_counter) + "_cal.jpg"
@@ -226,8 +210,8 @@ def measure_distance(crop_img):
 
     lower_yellow = np.array([10, 90, 220])
     upper_yellow = np.array([45, 255, 255])
-    print("measure distance")
-    pixel_width_1_5m = 35
+
+
     img_hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
     mask_yellow = cv2.inRange(img_hsv, lower_yellow, upper_yellow)
 
@@ -235,20 +219,22 @@ def measure_distance(crop_img):
     if cols > 60 and rows > 60:
         cv2.circle(crop_img, (50, 50), 10, 255)
 
-    cv2.imshow("Img HSV 1", crop_img)
+    cv2.imshow("Img HSV Meas", crop_img)
     cv2.waitKey(3)
 
     # Show only yellow pixels
-    # cv2.imshow("Color  Extraction 1", mask_yellow)
-    # cv2.waitKey()
+    #cv2.imshow("Mask Yellow Meas", mask_yellow)
+    #cv2.waitKey()
 
     # Remove noise from cropped traffic light
     kernel = np.ones((2, 2), np.uint8)
 
-    mask_yellow = cv2.erode(mask_yellow, kernel, iterations=1)
-    mask_yellow = cv2.dilate(mask_yellow, kernel, iterations=1)
+    eroded_meas = cv2.erode(mask_yellow, kernel, iterations=1)
+    #cv2.imshow('Eroded Meas', eroded_meas)
+    #cv2.waitKey()
 
-    cv2.imshow('Filtered Image', mask_yellow)
+    dilated_meas = cv2.dilate(eroded_meas, kernel, iterations=1)
+    cv2.imshow('Dilated Meas', dilated_meas)
     cv2.waitKey(3)
 
     height = mask_yellow.shape[0]
@@ -273,7 +259,7 @@ def measure_distance(crop_img):
     y_max_mask = np.max(y_val_white[np.nonzero(y_val_white)])
     y_min_mask = np.min(y_val_white[np.nonzero(y_val_white)])
 
-    print(x_max_mask - x_min_mask, "Width of traffic light")
+    #print(x_max_mask - x_min_mask, "Width of traffic light")
     distance_to_robot = -0.05062*(x_max_mask - x_min_mask) + 3.269  #0,3 correction
 
     print("Traffic Light at (m): ", distance_to_robot)
@@ -282,44 +268,28 @@ def measure_distance(crop_img):
 
 
 def crop_img():
-
     global live_image
     cv_image_color = live_image
     lower_yellow = np.array([10, 90, 240])
     upper_yellow = np.array([45, 255, 255])
 
-    #lower_yellow = np.array([10, 90, 220])
-    #upper_yellow = np.array([45, 255, 255])
-
-    #cv2.imshow("Img HSV2", cv_image_color)
-    #cv2.waitKey()
-
-    # lower_yellow = np.array([10, 140, 180])
-    # upper_yellow = np.array([45, 255 , 255])
-
-    # lower_yellow = np.array([10, 150, 180])
-    # upper_yellow = np.array([45, 255 , 255])
-
-    # lower_yellow = np.array([22, 93, 0])
-    # upper_yellow = np.array([45, 255 , 255])
     img_hsv = cv2.cvtColor(cv_image_color, cv2.COLOR_BGR2HSV)
     mask_yellow = cv2.inRange(img_hsv, lower_yellow, upper_yellow)
 
     (rows, cols, channels) = cv_image_color.shape
     if cols > 60 and rows > 60:
         cv2.circle(cv_image_color, (50, 50), 10, 255)
-    print("now")
 
-    # cv2.imshow("Input Image", cv_image_color)
-    # cv2.waitKey()
+    #cv2.imshow("Input Image", cv_image_color)
+    #cv2.waitKey()
 
-    # cv2.imshow("Img HSV", img_hsv)
-    # cv2.waitKey()
+    #cv2.imshow("Img HSV", img_hsv)
+    #cv2.waitKey()
 
     # Show only yellow pixels
 
     #cv2.imshow("Color  Extraction", mask_yellow)
-    #cv2.waitKey(2)
+    #cv2.waitKey()
 
     # Image kernel
     kernel_er = np.ones((1, 1), 'uint8')
@@ -329,12 +299,19 @@ def crop_img():
     kernel_dil = np.ones((3, 3), 'uint8')
     dilate_img = cv2.dilate(erode_img, kernel_dil, iterations=10)
 
+    #cv2.imshow("Eroded Image", erode_img)
+    #cv2.waitKey()
+
+    #cv2.imshow("Dilated Image", dilate_img)
+    #cv2.waitKey()
+
     # Find Blobs using contours
-    # Invert colors in image so no black blobs are detected
+    # Apply threshold function to have only black or white pixels
     threshold = cv2.threshold(dilate_img, 200, 255, cv2.THRESH_BINARY)[1]
 
-    #cv2.imshow("threshold", threshold)
+    #cv2.imshow("Threshold", threshold)
     #cv2.waitKey()
+
     # Find contours in picture
     (_, cnts, _) = cv2.findContours(threshold, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -346,16 +323,13 @@ def crop_img():
         cX = int(M["m10"] / M["m00"])
         cY = int(M["m01"] / M["m00"])
 
-        # draw the contour and center of the shape on the image
-        #cv2.circle(dilate_img, (cX, cY), 3, (126, 255, 255), -1)
-        #cv2.putText(dilate_img, "center", (cX - 20, cY - 20),
-                    #cv2.FONT_HERSHEY_SIMPLEX, 0.2, (126, 255, 255), 2)
-
     cnt = c
     approx = cv2.approxPolyDP(cnt, 0.009 * cv2.arcLength(cnt, True), True)
     # draws boundary of contours.
     cv2.drawContours(dilate_img, [approx], 0, (0, 0, 255), 5)
-    # Used to flatted the array containing
+
+
+# Used to flatted the array containing
     # the co-ordinates of the vertices.
     n = approx.ravel()
     i = 0
@@ -379,7 +353,7 @@ def crop_img():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (145, 200, 200))
         i = i + 1
 
-    #cv2.imshow("Blob extraaction", dilate_img)
+    #cv2.imshow("Draw larger contours dimensions", dilate_img)
     #cv2.waitKey()
 
     x = np.copy(x)
@@ -391,11 +365,12 @@ def crop_img():
     y_min = np.min(y[np.nonzero(y)]) - borders
 
     crop_img = cv_image_color[y_min:y_max, x_min:x_max]
-    # cv2.imshow("cropped", crop_img)
-    # cv2.waitKey()
+
+    #cv2.imshow("cropped", crop_img)
+    #cv2.waitKey()
 
     # ToDo
-    return measure_distance(crop_img), 0
+    return measure_distance(crop_img), 0 , crop_img
 
 
 def detect_aruco(cv_image_color2):
@@ -540,15 +515,10 @@ def detect_aruco(cv_image_color2):
 
 
 def check_color(cv_image_color):
-    global traffic_light
     # Split image
     color =  None
 
-
-
     HSV_image = cv2.cvtColor(cv_image_color, cv2.COLOR_BGR2HSV)
-
-
 
     h, s, v = cv2.split(HSV_image)
     # Mask out low saturated pixels
@@ -559,18 +529,16 @@ def check_color(cv_image_color):
     kernel_dil = np.ones((1, 1), 'uint8')
     dilate_img = cv2.dilate(erode_img, kernel_dil, iterations=10)
 
-
     # Find Blobs using contours
-    # Invert colors in image so no black blobs are detected
+    # Apply threshold function to have only black or white pixels
     threshold = cv2.threshold(dilate_img, 200, 255, cv2.THRESH_BINARY)[1]
-    cv2.imshow('image to analyze', threshold)
-    cv2.waitKey()
+
+    # cv2.imshow('image to analyze', threshold)
+    # cv2.waitKey()
     # Find contours in picture
     (_, cnts, _) = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
     # Find largest contour
-
-
-
     if cnts:
         c = max(cnts, key=cv2.contourArea)
         areas = cv2.contourArea(c)
@@ -578,14 +546,13 @@ def check_color(cv_image_color):
             cv2.drawContours(dilate_img, c, -1, (126, 255, 255), 3)
 
             M = cv2.moments(c)
-            cX = int(M["m10"] / M["m00"])
-            cY = int(M["m01"] / M["m00"])
+            # cX = int(M["m10"] / M["m00"])
+            # cY = int(M["m01"] / M["m00"])
 
             # draw the contour and center of the shape on the image
-            cv2.circle(cv_image_color, (cX, cY), 7, (126, 255, 255), -1)
-            cv2.putText(cv_image_color, "center", (cX - 20, cY - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (126, 255, 255), 2)
-
+            # cv2.circle(cv_image_color, (cX, cY), 7, (126, 255, 255), -1)
+            # cv2.putText(cv_image_color, "center", (cX - 20, cY - 20),
+                        #cv2.FONT_HERSHEY_SIMPLEX, 0.5, (126, 255, 255), 2)
 
             # Detect color of traffic light
             mask = np.zeros(HSV_image.shape[:2], np.uint8)
@@ -593,35 +560,12 @@ def check_color(cv_image_color):
             mean = cv2.mean(HSV_image, mask=mask)
 
             if 0 <= mean[0] <= 30:
-                #print("rot")
                 color = "red"
-                traffic_light = False
             elif 40 <= mean[0] <= 90:
-                #print("green")
-                traffic_light = True
                 color = "green"
             else:
                 color = "unknown"
     return color
-
-
-def canny_edges(cv_image_color2):
-    edges = cv2.Canny(cv_image_color2, 100, 200)
-    (_, cnts, _) = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    if cnts:
-        rectangles = []
-        for cnt in cnts:
-            approx = cv2.approxPolyDP(cnt, 0.01 * cv2.arcLength(cnt, True), True)
-            if len(approx) == 4:
-                rectangles.append(cnt)
-
-        if cnts:
-            c = max(rectangles, key=cv2.contourArea)
-
-            # draw the contour and center of the shape on the image
-            x, y, w, h = cv2.boundingRect(c)
-            #cv2.rectangle(edges, (x, y), (x + w, y + h), (100, 100, 100), 2)
-            #cv2.imshow("Canny", edges)
 
 
 def callback_angles(data):
@@ -1055,20 +999,23 @@ def thread_touch():
 
 
 if __name__ == "__main__":
+    # This function is used to start the subsystems
+
     # Start the ros node
     NAO_IP = robot_ip
     rospy.init_node('guidenao', anonymous=True)
 
     # Speech recognition to start the interaction
     voice()
-    rospy.sleep(2)
+    rospy.sleep(3)
 
+    # If the person asked for help
     initialize_ros()
     initialize_motion()
-    rospy.sleep(2)
+    rospy.sleep(3)
 
     # Detect the traffic light and calculate the distance
-    gx, gy = crop_img()
+    gx, gy, cropped_light = crop_img()
     gx = gx + robot_pos[1]
     gy = gy + robot_pos[0]
     # Create the goal marker for rviz
@@ -1081,12 +1028,25 @@ if __name__ == "__main__":
     # Greet the customer
     speech.say("Hello, I am your assistant to cross the street")
     speech.say("Touch my head once you feel ready to go")
+    rospy.sleep(3)
 
     # Check if the customer touches the robot
     while contact_lost:
         pass
 
-    speech.say("All right, I will calculate the best way to go")
+
+    # Check color of traffic light and wait until it is green.
+    # NOTE: from 1,5 m  and on is not reliable due to NAOs limited camera quality.
+    #       Deactivate if traffic light is further away
+
+    # speech.say("I will check the status of the traffic light and let you know once we can go")
+    # gx1, gy2, cropped_light = crop_img()
+    # color = check_color(cropped_light)
+    # while color != "green":
+        # gx1, gy2, cropped_light = crop_img()
+        # color = check_color(cropped_light)
+
+    speech.say("All right, we may go now, I will calculate the best way to go")
     rospy.sleep(3)
 
     # Start the main loop
